@@ -1,0 +1,200 @@
+# ─────────────────────────────────────────────
+# SECRETS — never commit these
+# ─────────────────────────────────────────────
+
+# Environment variable files — contain API keys
+.env
+.env.local
+.env.development
+.env.production
+*.env
+
+# Google Cloud credentials
+credentials.json
+service-account.json
+*-service-account.json
+application_default_credentials.json
+
+# ─────────────────────────────────────────────
+# PYTHON
+# ─────────────────────────────────────────────
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Compiled Python files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+.eggs/
+wheels/
+
+# Test cache and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+*.log
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+
+# ─────────────────────────────────────────────
+# ADK SPECIFIC
+# ─────────────────────────────────────────────
+
+# ADK session data (if any local storage is used)
+.adk/
+adk_sessions/
+*.session.json
+
+# ADK eval outputs
+eval_results/
+*.eval.json
+
+# ─────────────────────────────────────────────
+# GOOGLE CLOUD
+# ─────────────────────────────────────────────
+
+# gcloud config
+.gcloud/
+gcloud-config/
+
+# Terraform state (if using IaC for deployment)
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# ─────────────────────────────────────────────
+# IDEs AND EDITORS
+# ─────────────────────────────────────────────
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim
+*.swp
+*.swo
+*~
+.netrwhist
+
+# Emacs
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Spyder
+.spyproject/
+.spyderproject.cfg
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# ─────────────────────────────────────────────
+# OPERATING SYSTEM
+# ─────────────────────────────────────────────
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+Icon?
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ─────────────────────────────────────────────
+# LOGS AND TEMP FILES
+# ─────────────────────────────────────────────
+
+# Log files
+*.log
+logs/
+log/
+
+# Temp files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+tmp/
+temp/
+
+# ─────────────────────────────────────────────
+# TESTING AND CI
+# ─────────────────────────────────────────────
+
+# Test output
+test_output/
+test_results/
+junit.xml
+test-results.xml
+
+# ─────────────────────────────────────────────
+# WHAT TO ALWAYS COMMIT
+# ─────────────────────────────────────────────
+# These are intentionally NOT in .gitignore:
+#
+#   agent.py         ← your agent code
+#   __init__.py      ← package marker
+#   README.md        ← project documentation
+#   requirements.txt ← if you create one
+#
+# Create a requirements.txt with:
+#   pip freeze > requirements.txt
+# ─────────────────────────────────────────────
