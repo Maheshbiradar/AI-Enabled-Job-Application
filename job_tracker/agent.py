@@ -378,11 +378,367 @@ def get_application_detail(identifier: str, tool_context: ToolContext) -> dict:
         app_status=app["status"],
         applied_date=app["applied_date"],
         days_tracked=days_tracked,
-        salary_min=app["salary_min"],
-        salary_max=app["salary_max"],
-        location=app["location"],
-        notes=app["notes"],
-        company_research=app["company_research"],
-        has_research=app["company_research"] is not None,
-        last_updated=app["last_updated"],
+        salary_min=app.get("salary_min"),
+        salary_max=app.get("salary_max"),
+        location=app.get("location"),
+        notes=app.get("notes"),
+        company_research=app.get("company_research"),
+        has_research=app.get("company_research") is not None,
+        last_updated=app.get("last_updated"),
     )
+
+
+def delete_application(identifier: str, tool_context: ToolContext) -> dict:
+    """Delete a job application from the tracker.
+
+    Args:
+        identifier: The application ID or company name to delete.
+        tool_context: The context object containing state and other info.
+
+    Returns:
+        A dict confirming deletion, or an error if not found.
+    """
+    applications = tool_context.state.get("applications") or {}
+
+    if not applications:
+        return _err("No applications to delete")
+
+    # 1. Try exact ID match
+    app_id, app = identifier, applications.get(identifier)
+
+    # 2. If not found, try company name (case-insensitive)
+    if app is None:
+        for aid, a in applications.items():
+            if a.get("company", "").lower() == identifier.lower():
+                app_id, app = aid, a
+                break
+
+    if app is None:
+        return _err(f"No application found for '{identifier}'")
+
+    # Capture what we are about to delete
+    # so we can confirm it in the return value
+    deleted_company = app["company"]
+    deleted_role    = app["role"]
+    deleted_id      = app["id"]
+    deleted_status  = app["status"]
+
+    # Delete from state
+    del applications[app_id]
+    tool_context.state["applications"] = applications
+    tool_context.state["total_count"] = len(applications)
+    update_status_counts(tool_context.state, applications)
+
+    return _ok(
+        f"Deleted {deleted_role} at {deleted_company} ({deleted_id})",
+        deleted_id=deleted_id,
+        deleted_company=deleted_company,
+        deleted_role=deleted_role,
+        deleted_status=deleted_status,
+        remaining_count=len(applications),
+    )
+
+
+def attach_research(
+    company: str,
+    research_content: str,
+    tool_context: ToolContext,
+) -> dict:
+    """Attach or update company research notes for a job application.
+
+    Args:
+        company: The company name (or application ID) to attach research to.
+        research_content: The research text to attach.
+        tool_context: The context object containing state and other info.
+
+    Returns:
+        A dict confirming the research was attached, or an error if not found.
+    """
+    # Validate inputs
+    if not company:
+        return _err("Company name is required")
+    if not research_content:
+        return _err("Research content cannot be empty")
+
+    applications = tool_context.state.get("applications") or {}
+
+    # Find all matching applications and append to matches
+    matches = []
+    for aid, app in applications.items():
+        if company.lower() in app.get("company", "").lower():
+            matches.append((aid, app))
+
+    if not matches:
+        return _err(f"No application found matching '{company}'")
+
+    # If multiple matches — use most recently updated
+    app_id, target_app = max(matches, key=lambda x: x[1].get("last_updated", ""))
+    note = (
+        f"Multiple applications matched '{company}'; selected most recently updated: "
+        f"{target_app['company']} — {target_app['role']} ({app_id})"
+        if len(matches) > 1 else None
+    )
+
+    # Check if research already exists
+    already_had_research = target_app.get("company_research") is not None
+
+    # Attach research
+    target_app["company_research"] = research_content
+    target_app["last_updated"] = datetime.datetime.now().isoformat()
+    applications[app_id] = target_app
+    tool_context.state["applications"] = applications
+
+    return _ok(
+        f"Research attached to {target_app['company']} ({target_app['role']})",
+        id=target_app["id"],
+        company=target_app["company"],
+        role=target_app["role"],
+        action="updated" if already_had_research else "added",
+        word_count=len(research_content.split()),
+        note=note if note else None,
+    )
+
+search_agent = Agent(
+    model="gemini-flash-latest",
+    name="search_agent",
+    description=(
+        "Specialist web search agent for researching companies. "
+        "Searches for engineering culture, interview processes, "
+        "recent news, and reputation. Use this whenever the user "
+        "wants to research a company for a job application."
+    ),
+    instruction="""
+    You are a specialist research agent for job seekers.
+    Your only job is to research companies and return
+    structured findings.
+
+    [SEARCH STRATEGY]
+    For every company research request, run 3 searches.
+    Replace COMPANY_NAME with the actual company name given to you:
+
+    Search 1: "COMPANY_NAME engineering culture glassdoor 2025"
+    Search 2: "COMPANY_NAME software engineer interview process"
+    Search 3: "COMPANY_NAME news layoffs funding growth 2025"
+
+    [OUTPUT FORMAT]
+    Return your findings in this exact structure:
+
+    CULTURE:
+    What employees say about working there, work-life balance,
+    management style, team dynamics.
+
+    INTERVIEW PROCESS:
+    What the interview looks like — rounds, types of questions,
+    difficulty, timeline from application to offer.
+
+    RECENT NEWS:
+    Anything significant — layoffs, hiring freezes, funding,
+    acquisitions, leadership changes. Flag anything that should
+    affect the user's decision to pursue this role.
+
+    VERDICT:
+    One sentence recommendation — is this company worth pursuing
+    based on what you found?
+
+    [RULES]
+    - Always run all 3 searches before responding
+    - If search results are thin, say so — do not make things up
+    - Be honest about red flags — this person is making a
+    career decision
+    - Cite specific things from search results, not generalities
+    """,
+    tools=[google_search],
+)
+
+# ─────────────────────────────────────────────
+# ROOT AGENT
+# Coordinator — holds custom tools directly,
+# delegates research to search_agent via AgentTool
+# ─────────────────────────────────────────────
+
+root_agent = Agent(
+    model="gemini-flash-latest",
+
+    name="job_tracker",
+
+    description=(
+        "A job application tracking assistant that manages the "
+        "full application pipeline — adding applications, updating "
+        "statuses, researching companies, and providing analytics "
+        "on the job search progress."
+    ),
+    instruction="""
+`You are JobTracker, a focused assistant that helps
+manage job applications from first contact to offer.
+You track applications, update their progress through
+the pipeline, research companies, and give analytics
+on the job search.
+
+[YOUR TOOLS AND WHEN TO USE THEM]
+
+Use these tools DIRECTLY — do not delegate:
+
+  add_application
+    → when user adds a new job application
+    → trigger words: "add", "track", "applied to",
+      "I applied", "new application"
+
+  update_status
+    → when user reports progress on an application
+    → trigger words: "got a call", "interview scheduled",
+      "rejected", "offer received", "withdrew",
+      "update status", "move to"
+    → call ONCE with EXACTLY the status the user stated
+    → NEVER chain multiple update_status calls to bridge
+      gaps — if the transition is invalid, report the
+      error and tell the user which step to take next
+
+  view_applications
+    → when user wants to see their applications
+    → trigger words: "show me", "list", "what applications",
+      "which companies", "all my applications"
+    → also call this BEFORE calculate_stats to give
+      context
+
+  get_application_detail
+    → when user asks about ONE specific application
+    → trigger words: "tell me about", "details for",
+      "what is the status of", "how long since"
+
+  calculate_stats
+    → when user asks for analytics or summary
+    → trigger words: "stats", "how many", "success rate",
+      "response rate", "summary", "overview"
+
+  attach_research
+    → ONLY call this AFTER search_agent returns findings
+    → never call this directly from user message alone
+    → always call it with the research content from
+      search_agent, not with empty content
+
+  delete_application
+    → when user explicitly says to delete or remove
+    → ALWAYS confirm what you are deleting in your
+      response — this is irreversible
+
+DELEGATE to search_agent:
+
+  search_agent
+    → when user wants to research a company
+    → trigger words: "research", "look up", "find out
+      about", "what is X company like", "check"
+    → give it a DETAILED request including the company
+      name and what aspects to cover
+    → after it returns, call attach_research if the
+      user wants findings saved
+
+[ROUTING RULES]
+
+1. NEVER use google_search yourself — you do not have
+   it. Always delegate company research to search_agent.
+
+2. When delegating to search_agent be SPECIFIC:
+   POOR:  "research this company"
+   GOOD:  "Research Stripe — cover engineering culture,
+           interview process difficulty and format, and
+           any recent news about layoffs, hiring freezes,
+           or funding rounds. Return findings in the
+           standard CULTURE / INTERVIEW / NEWS / VERDICT
+           format."
+
+3. After search_agent returns findings AND user wants
+   them saved:
+   Step 1 → search_agent returns research text
+   Step 2 → call attach_research(
+              company=company_name,
+              research_content=findings_from_search
+            )
+   Step 3 → confirm both actions to user
+
+4. For update_status always show:
+   previous status → new status
+   Example: "Updated Stripe: applied → interview ✓"
+
+5. For delete_application always confirm:
+   "Deleted [role] at [company] (ID: [id])"
+
+6. NEVER chain update_status calls to bridge stages.
+   One user message = ONE update_status call.
+   If the tool returns an error, surface that error
+   to the user — do NOT retry with an intermediate
+   status to work around it.
+
+[PIPELINE REFERENCE]
+Remind users of valid next steps when they update status:
+
+  applied      → next: phone_screen, rejected, withdrawn
+  phone_screen → next: interview, rejected, withdrawn
+  interview    → next: offer, rejected, withdrawn
+  offer        → next: accepted, rejected, withdrawn
+  accepted     → terminal (congratulations!)
+  rejected     → terminal
+  withdrawn    → terminal
+
+[DISPLAY FORMAT]
+When showing application list, format clearly:
+
+  YOUR APPLICATIONS
+  ──────────────────────────────────────────────
+  ID              COMPANY    ROLE          STATUS
+  STR-20250510    Stripe     Sr Engineer   interview
+  GOO-20250512    Google     Staff Eng     applied
+  ──────────────────────────────────────────────
+  Total: 2  |  Active: 2  |  Rejected: 0
+
+When showing stats:
+
+  APPLICATION STATS
+  ──────────────────────────────────────────────
+  Total tracked:       5
+  Response rate:       60%  (3 of 5 responded)
+  In interview:        1
+  Offers received:     1
+  Avg days tracked:    12.3 days
+  Oldest pending:      Netflix (18 days, no response)
+  Avg target salary:   $195,000
+  ──────────────────────────────────────────────
+
+[TONE AND BEHAVIOUR]
+- Be direct and efficient — job searching is stressful,
+  do not waste the user's time
+- When research reveals red flags (layoffs, bad culture),
+  be honest and flag it clearly
+- Celebrate wins — offer received, interview scheduled
+- For old pending applications (over 14 days with no
+  response) proactively mention them
+- Never make up application data — always read from state
+
+[SCOPE]
+You handle job applications only. For anything outside
+this scope say:
+"I am focused on job application tracking. I can help
+you add applications, track progress, research companies,
+and analyse your job search. What would you like to do?"
+""",
+tools=[
+        # ── Specialist agent ──────────────────────────
+        # AgentTool reads search_agent.description to
+        # build the schema root LLM uses for routing
+        AgentTool(agent=search_agent),
+
+        # ── Custom tools ──────────────────────────────
+        # All Python functions — safe to coexist here
+        # because no built-in tools are in this list
+        add_application,
+        update_status,
+        view_applications,
+        get_application_detail,
+        calculate_stats,
+        attach_research,
+        delete_application,
+    ],
+    generate_content_config=types.GenerateContentConfig(
+        temperature=0.2,
+        max_output_tokens=4096,
+    ),
+)
