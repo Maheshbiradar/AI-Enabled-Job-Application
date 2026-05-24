@@ -213,3 +213,64 @@ def update_status(application_id: str, notes: str, new_status: str, tool_context
 
     # 6. Return confirmation
     return _ok(f"Updated {app['company']} from '{old_status}' to '{new_status}'", id=application_id, previous_status=old_status, new_status=new_status)
+
+def calculate_stats(tool_context: ToolContext) -> dict:
+    """Calculate and return statistics about the job applications.
+
+    Args:
+        tool_context: The context object containing state and other info.
+
+    Returns:
+        A dict containing various statistics about the applications, such as:
+        - total_count: Total number of applications
+        - status_counts: A breakdown of how many applications are in each status
+        - average_salary: Average salary range (if salary info is available)
+        - recent_activity: List of recent updates (company, role, status, date)
+    """ 
+    applications = tool_context.state.get("applications") or {}
+
+    if not applications:
+        return _ok("No applications tracked yet")
+
+    status_counts = {status: 0 for status in VALID_STATUSES}
+    for app in applications.values():
+        s = app.get("status")
+        if s in status_counts:
+            status_counts[s] += 1
+
+    # Response rate — "responded" = anything beyond "applied"
+    total = len(applications)
+    responded = total - status_counts.get("applied", 0)
+    response_rate = round(responded / total * 100, 1) if total else 0.0
+
+    # Average days since applied
+    today = datetime.date.today()
+    days_list = []
+    for app in applications.values():
+        try:
+            applied = datetime.date.fromisoformat(app["applied_date"])
+            days_list.append((today - applied).days)
+        except (KeyError, ValueError):
+            pass
+    avg_days_since_applied = round(sum(days_list) / len(days_list), 1) if days_list else 0.0
+
+    # Oldest pending (status = applied or phone_screen)
+    pending = [
+        app for app in applications.values()
+        if app.get("status") in {"applied", "phone_screen"}
+    ]
+    oldest_pending = min(pending, key=lambda a: a.get("applied_date", ""), default=None)
+
+    # Salary analytics (only where provided)
+    salaries = [app["salary_max"] for app in applications.values() if app.get("salary_max") is not None]
+    avg_salary = round(sum(salaries) / len(salaries), 2) if salaries else None
+
+    return _ok(
+        f"Stats for {total} application(s)",
+        total=total,
+        by_status=status_counts,
+        response_rate=response_rate,
+        avg_days_in_pipeline=avg_days_since_applied,
+        oldest_pending=oldest_pending,
+        avg_target_salary=avg_salary,
+    )
