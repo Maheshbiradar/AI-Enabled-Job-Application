@@ -57,6 +57,14 @@ def update_status_counts(state: dict, applications: dict) -> None:
     state["status_counts"] = counts
 
 
+def _ok(message: str, **kwargs) -> dict:
+    return {"result": "success", "message": message, **kwargs}
+
+
+def _err(message: str) -> dict:
+    return {"result": "error", "message": message}
+
+
 def add_application(
     tool_context: ToolContext,
     company: str,
@@ -87,10 +95,10 @@ def add_application(
     """
     # 1. Validate required fields
     if not company or not role:
-        return {"error": "Company and role are required fields."}
+        return _err("Company and role are required fields.")
 
     if status not in VALID_STATUSES:
-        return {"error": f"Invalid status '{status}', must be one of: {', '.join(sorted(VALID_STATUSES))}"}
+        return _err(f"Invalid status '{status}', must be one of: {', '.join(sorted(VALID_STATUSES))}")
 
     # 2. Generate unique ID
     prefix = company[:3].upper()
@@ -113,7 +121,7 @@ def add_application(
     # 5. Check for duplicate (same company + role)
     for app_id, app in applications.items():
         if app["company"].lower() == company.lower() and app["role"].lower() == role.lower():
-            return {"error": f"Application for this role at this company already exists with ID: {app_id}"}
+            return _err(f"Application for {role} at {company} already exists with ID {app_id}")
 
     # 6. Add to applications dict
     applications[application_id] = {
@@ -135,4 +143,73 @@ def add_application(
     tool_context.state["total_count"] = len(applications)
     update_status_counts(tool_context.state, applications)
     # 8. Return confirmation with application ID
-    return {"message": f"Application added successfully with ID {application_id}.", "application_id": application_id}
+    return _ok(f"Application {application_id} added successfully", id=application_id, company=company, role=role)
+
+def _find_application(query: str, applications: dict) -> tuple[str, dict] | tuple[None, None]:
+    """Try to find an application by ID first, then by company name (case-insensitive)."""
+    # Try exact ID match first
+    if query in applications:
+        return query, applications[query]
+    # Fall back to company name (case-insensitive, return first match)
+    query_lower = query.lower()
+    for app_id, app in applications.items():
+        if app["company"].lower() == query_lower:
+            return app_id, app
+    return None, None
+
+
+_TRANSITIONS: dict[str, set[str]] = {
+    "applied":      {"phone_screen", "rejected", "withdrawn"},
+    "phone_screen": {"interview",    "rejected", "withdrawn"},
+    "interview":    {"offer",        "rejected", "withdrawn"},
+    "offer":        {"accepted",     "rejected", "withdrawn"},
+    "accepted":     set(),   # terminal
+    "rejected":     set(),   # terminal
+    "withdrawn":    set(),   # terminal
+}
+
+
+def is_valid_transition(current: str, new: str) -> bool:
+    return new in _TRANSITIONS.get(current, set())
+
+
+def update_status(application_id: str, notes: str, new_status: str, tool_context: ToolContext) -> dict:
+    """Update the status of an existing job application.
+
+    Args:
+        application_id: The unique ID of the application to update.
+        notes: Additional notes about the status update (optional).
+        new_status: The new status to set for the application. Must be one of:
+            applied, phone_screen, interview, offer, rejected, withdrawn.
+        tool_context: The context object containing state and other info.
+
+    Returns:
+        A dict with a confirmation message or an error message if validation fails.
+    """
+    # 1. Validate new_status
+    if new_status not in VALID_STATUSES:
+        return _err(f"Invalid status '{new_status}', must be one of: {', '.join(sorted(VALID_STATUSES))}")
+
+    # 2. Load existing applications from state
+    applications = tool_context.state.get("applications") or {}
+
+    # 3. Find application by ID first, then by company name (case-insensitive)
+    application_id, app = _find_application(application_id, applications)
+    if app is None:
+        return _err(f"No application found matching '{application_id}'")
+
+    # 4. Update the application's status and notes
+    old_status = app["status"]
+    if not is_valid_transition(old_status, new_status):
+        return _err(f"Cannot move from '{old_status}' to '{new_status}'. Check pipeline order.")
+    app["status"] = new_status
+    if notes:
+        app["notes"] = notes
+    app["last_updated"] = datetime.datetime.now().isoformat()
+
+    # 5. Write back to state
+    tool_context.state["applications"] = applications
+    update_status_counts(tool_context.state, applications)
+
+    # 6. Return confirmation
+    return _ok(f"Updated {app['company']} from '{old_status}' to '{new_status}'", id=application_id, previous_status=old_status, new_status=new_status)
