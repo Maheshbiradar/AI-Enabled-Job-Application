@@ -327,3 +327,62 @@ def view_applications(filter_status: str, sort_by: str, tool_context: ToolContex
             "by_status": status_counts,
         },
     )
+
+
+def get_application_detail(identifier: str, tool_context: ToolContext) -> dict:
+    """Retrieve full details for a single job application.
+
+    Args:
+        identifier: The application ID or company name to look up.
+        tool_context: The context object containing state and other info.
+
+    Returns:
+        A dict with the full application record, or an error if not found.
+    """
+    applications = tool_context.state.get("applications") or {}
+
+    # 1. Try exact ID match
+    app_id, app = identifier, applications.get(identifier)
+
+    # 2. If not found, fall back to exact company name (case-insensitive)
+    if app is None:
+        identifier_lower = identifier.lower()
+        for aid, a in applications.items():
+            if a.get("company", "").lower() == identifier_lower:
+                app_id, app = aid, a
+                break
+
+    # 3. If still not found, try partial company name match
+    if app is None:
+        for aid, a in applications.items():
+            if identifier.lower() in a.get("company", "").lower():
+                app_id, app = aid, a
+                break
+
+    if app is None:
+        return _err(f"No application found matching '{identifier}'")
+
+    # ── SECTION 3: Calculate days since applied ─────────────
+    try:
+        applied = datetime.date.fromisoformat(app["applied_date"])
+        days_tracked = (datetime.date.today() - applied).days
+    except (KeyError, ValueError):
+        days_tracked = None
+
+    # ── SECTION 4: Return full detail ───────────────────────
+    return _ok(
+        f"Found application {app_id}",
+        id=app["id"],
+        company=app["company"],
+        role=app["role"],
+        app_status=app["status"],
+        applied_date=app["applied_date"],
+        days_tracked=days_tracked,
+        salary_min=app["salary_min"],
+        salary_max=app["salary_max"],
+        location=app["location"],
+        notes=app["notes"],
+        company_research=app["company_research"],
+        has_research=app["company_research"] is not None,
+        last_updated=app["last_updated"],
+    )
