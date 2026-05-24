@@ -274,3 +274,56 @@ def calculate_stats(tool_context: ToolContext) -> dict:
         oldest_pending=oldest_pending,
         avg_target_salary=avg_salary,
     )
+
+def view_applications(filter_status: str, sort_by: str, tool_context: ToolContext) -> dict:
+    """View job applications with optional filtering.
+
+    Args:
+        filter_status: A keyword to search for in company names (case-insensitive).
+        status: Filter applications by this status (optional).
+        tool_context: The context object containing state and other info.
+
+    Returns:
+        A dict containing a list of applications matching the filters, or an error message if validation fails.
+    """
+    applications = tool_context.state.get("applications") or {}
+
+    # Validate status filter if provided
+    if filter_status and filter_status not in VALID_STATUSES:
+        return _err(f"Invalid filter '{filter_status}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}")
+
+    if not applications:
+        return _ok("No applications tracked yet", count=0, applications=[])
+
+    if filter_status:
+        results = [app for app in applications.values() if app.get("status") == filter_status]
+    else:
+        results = list(applications.values())
+
+    # Sort results
+    STATUS_ORDER = list(_TRANSITIONS.keys())
+    if sort_by == "company":
+        results.sort(key=lambda a: a.get("company", "").lower())
+    elif sort_by == "status":
+        results.sort(key=lambda a: STATUS_ORDER.index(a["status"]) if a.get("status") in STATUS_ORDER else len(STATUS_ORDER))
+    else:  # default: sort by applied_date descending
+        results.sort(key=lambda a: a.get("applied_date", ""), reverse=True)
+
+    # Summary counts — always across ALL applications, regardless of filter
+    total = len(applications)
+    status_counts = tool_context.state.get("status_counts") or {}
+    active_counts = {s: status_counts.get(s, 0) for s in ("applied", "phone_screen", "interview", "offer")}
+    active_count = sum(active_counts.values())
+    formatted = results
+
+    return _ok(
+        f"{len(formatted)} application(s) found",
+        filter_applied=filter_status if filter_status else "none",
+        count=len(formatted),
+        applications=formatted,
+        summary={
+            "total":     total,
+            "active":    active_count,
+            "by_status": status_counts,
+        },
+    )
